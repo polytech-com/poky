@@ -89,6 +89,11 @@ try:
 except ImportError:
     inotify_syscalls = None
 
+try:
+    import aionotify
+except ImportError:
+    aionotify = None
+
 
 __author__ = "seb@dbzteam.org (Sebastien Martini)"
 
@@ -120,12 +125,17 @@ class INotifyWrapper:
         """
         Factory method instanciating and returning the right wrapper.
         """
-        # First, try to use ctypes.
+        # First, try to use aionotify
+        if aionotify:
+            inotify = _AINotifyWrapper()
+            if inotify.init():
+                return inotify        
+        # Second, try to use ctypes.
         if ctypes:
             inotify = _CtypesLibcINotifyWrapper()
             if inotify.init():
                 return inotify
-        # Second, see if C extension is compiled.
+        # Third, see if C extension is compiled.
         if inotify_syscalls:
             inotify = _INotifySyscallsWrapper()
             if inotify.init():
@@ -250,6 +260,40 @@ class _CtypesLibcINotifyWrapper(INotifyWrapper):
     def _inotify_rm_watch(self, fd, wd):
         assert self._libc is not None
         return self._libc.inotify_rm_watch(fd, wd)
+
+
+class _AINotifyWrapper(INotifyWrapper):
+    def __init__(self):
+        self._count = 0
+        self._items = []
+
+    def init(self):
+        return True
+
+    def _get_errno(self):
+        return None
+
+    def _inotify_init(self):
+        self._watcher = aionotify.Watcher()
+        return 1
+
+    def _inotify_add_watch(self, fd, pathname, mask):
+        count = self._count
+        try:
+            self._watcher.watch(pathname, mask)
+            self._items.insert(count, pathname)
+            self._count += 1
+        except ValueError:
+            pass
+        return count
+
+    def _inotify_rm_watch(self, fd, wd):
+        try:
+            self._watcher.unwatch(self._items[wd])
+            self._items.pop(wd)
+        except ValueError:
+            pass
+        return 1
 
 
 # Logging
